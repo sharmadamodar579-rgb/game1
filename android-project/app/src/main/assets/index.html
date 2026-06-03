@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>Cyber-Craft E2EE Sandbox</title>
+  
+  <!-- Modern Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Rajdhani:wght@500;700&display=swap" rel="stylesheet">
+  
+  <!-- Stylesheets -->
+  <link rel="stylesheet" href="style.css">
+
+  <!-- Polyfill for import maps in Safari / Older devices -->
+  <script async src="https://unpkg.com/es-module-shims@1.7.3/dist/es-module-shims.js"></script>
+
+  <!-- Import Maps for Bare Module Imports -->
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://unpkg.com/three@0.153.0/build/three.module.min.js",
+      "three/addons/": "https://unpkg.com/three@0.153.0/examples/jsm/",
+      "cannon-es": "https://cdn.jsdelivr.net/npm/cannon-es@0.20.0/+esm",
+      "peerjs": "https://esm.sh/peerjs@1.5.4"
+    }
+  }
+  </script>
+</head>
+<body>
+
+  <!-- Loading Screen -->
+  <div id="loading-screen" class="glass-panel">
+    <div class="loader"></div>
+    <h1 class="neon-text">CYBER-CRAFT</h1>
+    <p>Initializing WebGL and Physics Engines...</p>
+  </div>
+
+  <!-- Connection Lobby Overlay -->
+  <div id="lobby-overlay" class="glass-panel active">
+    <div class="lobby-content">
+      <h1 class="logo-text neon-text-pink">CYBER-CRAFT</h1>
+      <p class="subtitle">E2EE MULTIPLAYER SANDBOX</p>
+
+      <div class="lobby-box">
+        <h3>Host a Room</h3>
+        <button id="btn-host" class="btn primary-btn">Generate Room Code</button>
+        <div id="host-code-display" class="code-box hidden">
+          <span>ROOM ID:</span>
+          <strong id="lbl-room-id" class="neon-text-cyan">----</strong>
+          <p class="hint">Share this code with your friend</p>
+        </div>
+      </div>
+
+      <div class="divider"><span>OR</span></div>
+
+      <div class="lobby-box">
+        <h3>Join a Friend</h3>
+        <input type="text" id="txt-join-id" placeholder="ENTER ROOM ID" maxlength="8" autocomplete="off">
+        <button id="btn-join" class="btn secondary-btn">Connect & Play</button>
+      </div>
+
+      <div class="divider"><span>OR</span></div>
+
+      <div class="lobby-box">
+        <button id="btn-singleplayer" class="btn" style="background: var(--yellow); color: #0b0716; box-shadow: 0 4px 15px rgba(255, 208, 0, 0.3);">Single Player Mode</button>
+      </div>
+
+      <div id="lobby-status" class="lobby-status">Ready to connect...</div>
+    </div>
+  </div>
+
+  <!-- Three.js Render Target Canvas -->
+  <canvas id="game-canvas"></canvas>
+
+  <!-- Game HUD Layer -->
+  <div id="game-hud" class="hud-container hidden">
+    <!-- Top Bar Info -->
+    <div class="hud-top-bar">
+      <div class="hud-card status-card">
+        <div class="indicator green" id="peer-status-light"></div>
+        <span id="lbl-connection-status">Disconnected</span>
+      </div>
+      <button id="btn-exit" class="btn danger-btn-sm">Exit Room</button>
+    </div>
+
+    <!-- Right Side: Encryption Debug & Key visualizer -->
+    <div class="hud-card crypto-card" id="crypto-panel">
+      <div class="crypto-header">
+        <div class="padlock-icon secure">🔒</div>
+        <span>END-TO-END ENCRYPTED</span>
+      </div>
+      <div class="crypto-body">
+        <div class="crypto-row">
+          <label>Derived AES Key:</label>
+          <span id="crypto-aes-key">Awaiting connection...</span>
+        </div>
+        <div class="crypto-row">
+          <label>Local ECDH Public Key:</label>
+          <span id="crypto-local-pub">Generating keys...</span>
+        </div>
+        <div class="crypto-row">
+          <label>Remote ECDH Public Key:</label>
+          <span id="crypto-remote-pub">-</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Bottom Left: Chat Box -->
+    <div id="chat-panel" class="hud-card chat-card">
+      <div class="chat-header">
+        <span>🔒 Secure Chat Channel</span>
+        <button id="btn-toggle-chat-size" class="icon-btn">[-]</button>
+      </div>
+      <div id="chat-messages" class="chat-messages">
+        <div class="chat-system">Enter chat message below. Encrypted via AES-GCM-256.</div>
+      </div>
+      <form id="chat-form" class="chat-form">
+        <input type="text" id="txt-chat-message" placeholder="Send secure message..." autocomplete="off" maxlength="120">
+        <button type="submit" class="btn chat-submit-btn">Send</button>
+      </form>
+    </div>
+
+    <!-- Bottom Center: Building Toolbox -->
+    <div class="hud-toolbox" id="toolbox">
+      <button class="tool-btn active" data-type="neon-block">
+        <span class="tool-preview neon-preview"></span>
+        <span class="tool-name">Neon</span>
+      </button>
+      <button class="tool-btn" data-type="crate">
+        <span class="tool-preview crate-preview">📦</span>
+        <span class="tool-name">Crate</span>
+      </button>
+      <button class="tool-btn" data-type="bounce">
+        <span class="tool-preview bounce-preview">▲</span>
+        <span class="tool-name">Bounce</span>
+      </button>
+      <button class="tool-btn" data-type="lava">
+        <span class="tool-preview lava-preview">🔥</span>
+        <span class="tool-name">Lava</span>
+      </button>
+    </div>
+
+    <!-- Touch Mobile Overlay (Joystick + Action Keys) -->
+    <div id="mobile-overlay" class="mobile-hud hidden">
+      <!-- Joystick Zone on Left -->
+      <div id="joystick-zone">
+        <div id="joystick-ring">
+          <div id="joystick-handle"></div>
+        </div>
+      </div>
+
+      <!-- Action Touch Keys on Right -->
+      <div class="touch-actions-group">
+        <button id="btn-touch-mode" class="touch-btn mode-btn">
+          <span class="btn-icon">🔨</span>
+          <span class="btn-label">Build</span>
+        </button>
+        <div class="touch-actions-action-grid">
+          <button id="btn-touch-place" class="touch-btn place-btn hidden">
+            <span class="btn-icon">＋</span>
+            <span class="btn-label">Place</span>
+          </button>
+          <button id="btn-touch-delete" class="touch-btn delete-btn hidden">
+            <span class="btn-icon">－</span>
+            <span class="btn-label">Del</span>
+          </button>
+          <button id="btn-touch-jump" class="touch-btn jump-btn">
+            <span class="btn-icon">▲</span>
+            <span class="btn-label">Jump</span>
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Core Game Script -->
+  <script type="module" src="main.js"></script>
+</body>
+</html>

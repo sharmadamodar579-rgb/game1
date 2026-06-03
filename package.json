@@ -1,0 +1,19 @@
+{
+  "name": "cyber-craft-sandbox",
+  "version": "1.0.0",
+  "description": "3D E2EE Roblox-like sandbox game running in Web and Android App",
+  "main": "sync-assets.js",
+  "scripts": {
+    "sync": "node sync-assets.js"
+  },
+  "keywords": [
+    "threejs",
+    "cannon-es",
+    "peerjs",
+    "webrtc",
+    "e2ee",
+    "android"
+  ],
+  "author": "Antigravity",
+  "license": "MIT"
+}
