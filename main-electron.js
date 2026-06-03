@@ -95,9 +95,9 @@ async function createWindow() {
     mainWindow.loadURL(targetUrl);
 
     // If loading online URL fails (e.g. offline), fall back to local server
-    mainWindow.webContents.on('did-fail-load', (event, errorCode, errorDescription) => {
-      // Bypasses internal triggers (like favicon or extension failures) and matches core document loading failures
-      if (mainWindow) {
+    mainWindow.webContents.on('did-fail-load', (event, errorCode, errorDescription, validatedURL, isMainFrame) => {
+      // Only redirect if the main frame itself failed to load, and it was trying to reach the live URL
+      if (isMainFrame && validatedURL === targetUrl && mainWindow) {
         console.warn(`Failed to load online URL (${errorDescription}). Loading local fallback...`);
         mainWindow.loadURL(`http://127.0.0.1:${port}`);
       }
