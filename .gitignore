@@ -1,7 +1,5 @@
 node_modules/
 game.zip
-android-project/app/build/
-android-project/.gradle/
-android-project/local.properties
+android-project/
 .DS_Store
 Thumbs.db

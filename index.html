@@ -3,20 +3,20 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-  <title>Cyber-Craft E2EE Sandbox</title>
+  <title>Cyber-Craft: Advanced Sandbox</title>
   
   <!-- Modern Fonts -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Rajdhani:wght@500;700&display=swap" rel="stylesheet">
   
-  <!-- Stylesheets -->
+  <!-- Stylesheet -->
   <link rel="stylesheet" href="style.css">
 
-  <!-- Polyfill for import maps in Safari / Older devices -->
+  <!-- Polyfill for import maps -->
   <script async src="https://unpkg.com/es-module-shims@1.7.3/dist/es-module-shims.js"></script>
 
-  <!-- Import Maps for Bare Module Imports -->
+  <!-- Import Maps -->
   <script type="importmap">
   {
     "imports": {
@@ -34,95 +34,195 @@
   <div id="loading-screen" class="glass-panel">
     <div class="loader"></div>
     <h1 class="neon-text">CYBER-CRAFT</h1>
-    <p>Initializing WebGL and Physics Engines...</p>
+    <p>Loading 3D Mannequins and Asset Packs...</p>
   </div>
 
-  <!-- Connection Lobby Overlay -->
-  <div id="lobby-overlay" class="glass-panel active">
-    <div class="lobby-content">
+  <!-- Multi-stage Interface Manager -->
+  <div id="lobby-manager" class="lobby-container active">
+    
+    <!-- STAGE 1: LOGIN SCREEN -->
+    <div id="screen-login" class="screen-panel active">
       <h1 class="logo-text neon-text-pink">CYBER-CRAFT</h1>
-      <p class="subtitle">E2EE MULTIPLAYER SANDBOX</p>
+      <p class="subtitle">3D SHAPE & WARDROBE SANDBOX</p>
+      
+      <div class="input-group">
+        <label for="txt-username">Enter Nickname</label>
+        <input type="text" id="txt-username" placeholder="AVATAR NAME" maxlength="12" autocomplete="off">
+      </div>
+
+      <div class="character-select-group">
+        <label>Select Mannequin Model</label>
+        <div class="gender-options">
+          <button id="btn-char-male" class="gender-btn active" data-char="K">
+            <span class="btn-avatar-icon">🚹</span>
+            <div class="btn-avatar-details">
+              <strong>K</strong>
+              <span>Male Mannequin</span>
+            </div>
+          </button>
+          <button id="btn-char-female" class="gender-btn" data-char="R">
+            <span class="btn-avatar-icon">🚺</span>
+            <div class="btn-avatar-details">
+              <strong>R</strong>
+              <span>Female Mannequin</span>
+            </div>
+          </button>
+        </div>
+      </div>
+
+      <button id="btn-login-next" class="btn primary-btn" style="margin-top: 15px;">Next</button>
+    </div>
+
+    <!-- STAGE 2: MODE SELECTION -->
+    <div id="screen-mode" class="screen-panel">
+      <h2 class="neon-text-cyan">Select Game Mode</h2>
+      <p class="section-desc">Choose to play alone offline or join other online players.</p>
+
+      <div class="mode-buttons">
+        <button id="btn-mode-single" class="btn primary-btn select-mode-btn">
+          <strong>Single Player</strong>
+          <span>Local Physics Sandbox</span>
+        </button>
+        <button id="btn-mode-multi" class="btn secondary-btn select-mode-btn">
+          <strong>Multiplayer</strong>
+          <span>Mesh WebRTC Network</span>
+        </button>
+      </div>
+      <button class="btn-back btn text-btn">← Back</button>
+    </div>
+
+    <!-- STAGE 3: MULTIPLAYER CONFIGURATION -->
+    <div id="screen-multi-config" class="screen-panel">
+      <h2 class="neon-text-pink">Multiplayer Lobby Settings</h2>
+      
+      <!-- Player Limit Select -->
+      <div class="config-group">
+        <label>Room Player Capacity</label>
+        <div class="toggle-group" id="limit-toggle-group">
+          <button class="toggle-btn active" data-val="2">2 Players</button>
+          <button class="toggle-btn" data-val="3">3 Players</button>
+          <button class="toggle-btn" data-val="4">4 Players</button>
+        </div>
+      </div>
+
+      <!-- Room Privacy Select -->
+      <div class="config-group">
+        <label>Room Privacy Type</label>
+        <div class="toggle-group" id="privacy-toggle-group">
+          <button class="toggle-btn active" data-val="public">Public Match</button>
+          <button class="toggle-btn" data-val="private">Private Code</button>
+        </div>
+      </div>
+
+      <button id="btn-multi-config-next" class="btn primary-btn">Next</button>
+      <button class="btn-back btn text-btn">← Back</button>
+    </div>
+
+    <!-- STAGE 4: PRIVATE LOBBY CODE MANAGER (Conditional) -->
+    <div id="screen-private-lobby" class="screen-panel">
+      <h2 class="neon-text-cyan">Private Room Access</h2>
 
       <div class="lobby-box">
-        <h3>Host a Room</h3>
-        <button id="btn-host" class="btn primary-btn">Generate Room Code</button>
-        <div id="host-code-display" class="code-box hidden">
-          <span>ROOM ID:</span>
-          <strong id="lbl-room-id" class="neon-text-cyan">----</strong>
-          <p class="hint">Share this code with your friend</p>
+        <h3>Host a Private Room</h3>
+        <button id="btn-host-private" class="btn primary-btn">Generate Room Code</button>
+        <div id="host-code-box" class="code-box hidden">
+          <span>ROOM CODE:</span>
+          <strong id="lbl-room-code" class="neon-text-pink">----</strong>
+          <p class="hint">Give this code to other players</p>
         </div>
       </div>
 
       <div class="divider"><span>OR</span></div>
 
       <div class="lobby-box">
-        <h3>Join a Friend</h3>
-        <input type="text" id="txt-join-id" placeholder="ENTER ROOM ID" maxlength="8" autocomplete="off">
-        <button id="btn-join" class="btn secondary-btn">Connect & Play</button>
+        <h3>Join a Private Room</h3>
+        <input type="text" id="txt-private-join-id" placeholder="ENTER ROOM CODE" maxlength="8" autocomplete="off">
+        <button id="btn-join-private" class="btn secondary-btn">Connect Room</button>
       </div>
 
-      <div class="divider"><span>OR</span></div>
-
-      <div class="lobby-box">
-        <button id="btn-singleplayer" class="btn" style="background: var(--yellow); color: #0b0716; box-shadow: 0 4px 15px rgba(255, 208, 0, 0.3);">Single Player Mode</button>
-      </div>
-
-      <div id="lobby-status" class="lobby-status">Ready to connect...</div>
+      <div id="matchmaking-status" class="lobby-status">Ready to initialize room...</div>
+      <button class="btn-back btn text-btn">← Back</button>
     </div>
+
+    <!-- STAGE 5: THEME SELECTION -->
+    <div id="screen-theme" class="screen-panel">
+      <h2 class="neon-text-pink">Select World Theme</h2>
+      <p class="section-desc">Choose the aesthetic surroundings for the sandbox.</p>
+
+      <div class="theme-grid">
+        <button class="theme-card active" data-theme="neon">
+          <div class="theme-preview theme-neon-bg"></div>
+          <strong>Synthwave Grid</strong>
+          <span>Neon pink/blue grid in space</span>
+        </button>
+        <button class="theme-card" data-theme="space">
+          <div class="theme-preview theme-space-bg"></div>
+          <strong>Cosmic Void</strong>
+          <span>Gold stars & asteroid fields</span>
+        </button>
+        <button class="theme-card" data-theme="volcano">
+          <div class="theme-preview theme-volcano-bg"></div>
+          <strong>Volcano Ledge</strong>
+          <span>Dark obsidian rock & lava flow</span>
+        </button>
+      </div>
+
+      <button id="btn-start-game" class="btn secondary-btn" style="margin-top: 15px;">Start</button>
+      <button class="btn-back btn text-btn">← Back</button>
+    </div>
+
   </div>
 
-  <!-- Three.js Render Target Canvas -->
+  <!-- Three.js Render Target -->
   <canvas id="game-canvas"></canvas>
 
-  <!-- Game HUD Layer -->
+  <!-- Interactive Crosshair (Helpful for mobile placing) -->
+  <div id="hud-crosshair" class="crosshair hidden">＋</div>
+
+  <!-- In-Game HUD overlay -->
   <div id="game-hud" class="hud-container hidden">
+    
     <!-- Top Bar Info -->
     <div class="hud-top-bar">
       <div class="hud-card status-card">
-        <div class="indicator green" id="peer-status-light"></div>
-        <span id="lbl-connection-status">Disconnected</span>
+        <div class="indicator red" id="peer-status-light"></div>
+        <span id="lbl-connection-status">Single Player Mode</span>
       </div>
-      <button id="btn-exit" class="btn danger-btn-sm">Exit Room</button>
+      <button id="btn-exit" class="btn danger-btn-sm">Exit Game</button>
     </div>
 
-    <!-- Right Side: Encryption Debug & Key visualizer -->
+    <!-- Active Cryptography Details Drawer -->
     <div class="hud-card crypto-card" id="crypto-panel">
       <div class="crypto-header">
         <div class="padlock-icon secure">🔒</div>
-        <span>END-TO-END ENCRYPTED</span>
+        <span>MESH E2EE CHANNELS</span>
       </div>
       <div class="crypto-body">
         <div class="crypto-row">
-          <label>Derived AES Key:</label>
-          <span id="crypto-aes-key">Awaiting connection...</span>
+          <label>Negotiated Keys:</label>
+          <span id="crypto-aes-key">Offline Mode</span>
         </div>
         <div class="crypto-row">
-          <label>Local ECDH Public Key:</label>
-          <span id="crypto-local-pub">Generating keys...</span>
-        </div>
-        <div class="crypto-row">
-          <label>Remote ECDH Public Key:</label>
-          <span id="crypto-remote-pub">-</span>
+          <label>Local Mannequin:</label>
+          <span id="crypto-local-pub">Generating...</span>
         </div>
       </div>
     </div>
 
-    <!-- Bottom Left: Chat Box -->
+    <!-- Bottom Left Chat overlay -->
     <div id="chat-panel" class="hud-card chat-card">
       <div class="chat-header">
-        <span>🔒 Secure Chat Channel</span>
+        <span>🔒 Secure Mesh Chat</span>
         <button id="btn-toggle-chat-size" class="icon-btn">[-]</button>
       </div>
-      <div id="chat-messages" class="chat-messages">
-        <div class="chat-system">Enter chat message below. Encrypted via AES-GCM-256.</div>
-      </div>
+      <div id="chat-messages" class="chat-messages"></div>
       <form id="chat-form" class="chat-form">
         <input type="text" id="txt-chat-message" placeholder="Send secure message..." autocomplete="off" maxlength="120">
         <button type="submit" class="btn chat-submit-btn">Send</button>
       </form>
     </div>
 
-    <!-- Bottom Center: Building Toolbox -->
+    <!-- Bottom Center Builder Toolbox -->
     <div class="hud-toolbox" id="toolbox">
       <button class="tool-btn active" data-type="neon-block">
         <span class="tool-preview neon-preview"></span>
@@ -142,17 +242,90 @@
       </button>
     </div>
 
-    <!-- Touch Mobile Overlay (Joystick + Action Keys) -->
+    <!-- Sliding Wardrobe Drawer Overlay (Hidden by default, shown by Wardrobe block proximity) -->
+    <div id="wardrobe-panel" class="hud-card wardrobe-drawer hidden">
+      <div class="wardrobe-header">
+        <h3>👔 Wardrobe Closet</h3>
+        <button id="btn-close-wardrobe" class="icon-btn">✕</button>
+      </div>
+      <p class="hint">Customize K/R mannequin clothing bottom-to-top</p>
+      
+      <div class="wardrobe-body">
+        <!-- Head / Hats -->
+        <div class="wardrobe-section">
+          <label>1. Headwear</label>
+          <div class="wardrobe-options" data-slot="head">
+            <button class="opt-btn active" data-item="none">None</button>
+            <button class="opt-btn" data-item="visor">Neon Visor</button>
+            <button class="opt-btn" data-item="helmet">Space Helmet</button>
+            <button class="opt-btn" data-item="cap">Sport Cap</button>
+          </div>
+        </div>
+
+        <!-- Torso / Jacket -->
+        <div class="wardrobe-section">
+          <label>2. Torso / Shirt</label>
+          <div class="wardrobe-options" data-slot="torso">
+            <button class="opt-btn active" data-item="none">None</button>
+            <button class="opt-btn" data-item="jacket">Cyber Jacket</button>
+            <button class="opt-btn" data-item="hoodie">Hoodie</button>
+            <button class="opt-btn" data-item="vest">Utility Vest</button>
+          </div>
+        </div>
+
+        <!-- Legs / Pants -->
+        <div class="wardrobe-section">
+          <label>3. Legwear / Pants</label>
+          <div class="wardrobe-options" data-slot="legs">
+            <button class="opt-btn active" data-item="none">None</button>
+            <button class="opt-btn" data-item="pants">Cargo Jeans</button>
+            <button class="opt-btn" data-item="shorts">Sport Shorts</button>
+            <button class="opt-btn" data-item="skirt">Grid Skirt</button>
+          </div>
+        </div>
+
+        <!-- Feet / Shoes -->
+        <div class="wardrobe-section">
+          <label>4. Footwear</label>
+          <div class="wardrobe-options" data-slot="feet">
+            <button class="opt-btn active" data-item="none">None</button>
+            <button class="opt-btn" data-item="boots">Combat Boots</button>
+            <button class="opt-btn" data-item="sneakers">Sneakers</button>
+            <button class="opt-btn" data-item="rings">Hover Rings</button>
+          </div>
+        </div>
+
+        <!-- Color Palette -->
+        <div class="wardrobe-section">
+          <label>Clothing Color Palette</label>
+          <div class="color-palette" id="wardrobe-colors">
+            <button class="color-dot active" data-color="0xff007f" style="background-color: #ff007f;"></button>
+            <button class="color-dot" data-color="0x00f0ff" style="background-color: #00f0ff;"></button>
+            <button class="color-dot" data-color="0xffd000" style="background-color: #ffd000;"></button>
+            <button class="color-dot" data-color="0x39ff14" style="background-color: #39ff14;"></button>
+            <button class="color-dot" data-color="0xffffff" style="background-color: #ffffff;"></button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Mobile Touch Overlay HUD -->
     <div id="mobile-overlay" class="mobile-hud hidden">
-      <!-- Joystick Zone on Left -->
+      <!-- Virtual Joystick -->
       <div id="joystick-zone">
         <div id="joystick-ring">
           <div id="joystick-handle"></div>
         </div>
       </div>
 
-      <!-- Action Touch Keys on Right -->
+      <!-- Actions Group -->
       <div class="touch-actions-group">
+        <!-- Wardrobe Action Button (Appears when near Wardrobe block) -->
+        <button id="btn-touch-wardrobe" class="touch-btn mode-btn hidden" style="background: rgba(255, 208, 0, 0.25); border-color: var(--yellow);">
+          <span class="btn-icon">👔</span>
+          <span class="btn-label">Closet</span>
+        </button>
+        
         <button id="btn-touch-mode" class="touch-btn mode-btn">
           <span class="btn-icon">🔨</span>
           <span class="btn-label">Build</span>
@@ -175,7 +348,7 @@
     </div>
   </div>
 
-  <!-- Core Game Script -->
+  <!-- Boot module script -->
   <script type="module" src="main.js"></script>
 </body>
 </html>

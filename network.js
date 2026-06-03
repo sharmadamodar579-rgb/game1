@@ -30,53 +30,53 @@ export class NetworkManager {
   constructor(game) {
     this.game = game;
     this.peer = null;
-    this.conn = null;
+    this.connections = new Map(); // peerId -> WebRTC DataConnection
     this.isHost = false;
     this.roomId = null;
-    
-    // Cryptography state
-    this.localKeyPair = null;
-    this.remotePublicKey = null;
-    this.sharedAesKey = null;
-    this.sharedAesKeyHex = null;
+    this.myHandle = null; // Username handle e.g. "Bob#4829"
     this.isSinglePlayer = false;
+
+    // Mesh Room Peers tracked by Host
+    this.lobbyPeers = []; // list of Peer IDs in room
+
+    // E2EE State mapping: peerId -> sharedAesKey
+    this.localKeyPair = null;
+    this.sharedKeys = new Map(); // peerId -> CryptoKey (AES-GCM)
+    this.sharedKeysHex = new Map(); // peerId -> hex string
+
+    // Friend system state
+    this.friends = []; // list of handles (e.g. ["Alice#9920"])
     
     this.initUI();
+    this.loadFriends();
   }
 
   initUI() {
-    this.btnHost = document.getElementById("btn-host");
-    this.btnJoin = document.getElementById("btn-join");
-    this.btnSingle = document.getElementById("btn-singleplayer");
-    this.txtJoinId = document.getElementById("txt-join-id");
+    // Lobby panel references
     this.lobbyOverlay = document.getElementById("lobby-overlay");
-    this.lobbyStatus = document.getElementById("lobby-status");
-    this.hostCodeDisplay = document.getElementById("host-code-display");
-    this.lblRoomId = document.getElementById("lbl-room-id");
-    this.btnExit = document.getElementById("btn-exit");
-
-    this.peerStatusLight = document.getElementById("peer-status-light");
-    this.lblConnectionStatus = document.getElementById("lbl-connection-status");
+    this.lobbyManager = document.getElementById("lobby-manager");
+    this.lobbyStatus = document.getElementById("matchmaking-status");
     
-    // Crypto UI
-    this.cryptoAesKey = document.getElementById("crypto-aes-key");
-    this.cryptoLocalPub = document.getElementById("crypto-local-pub");
-    this.cryptoRemotePub = document.getElementById("crypto-remote-pub");
+    // Config toggles
+    this.limitToggleGroup = document.getElementById("limit-toggle-group");
+    this.privacyToggleGroup = document.getElementById("privacy-toggle-group");
 
-    // Chat UI
+    // Chat items
     this.chatForm = document.getElementById("chat-form");
     this.txtChatMessage = document.getElementById("txt-chat-message");
     this.chatMessages = document.getElementById("chat-messages");
     this.btnToggleChat = document.getElementById("btn-toggle-chat-size");
     this.chatPanel = document.getElementById("chat-panel");
 
-    // Connect event listeners
-    this.btnHost.addEventListener("click", () => this.startHosting());
-    this.btnJoin.addEventListener("click", () => this.joinRoom());
-    this.btnSingle.addEventListener("click", () => this.startSinglePlayer());
-    this.btnExit.addEventListener("click", () => this.disconnect());
+    // Crypto dashboard
+    this.cryptoAesKey = document.getElementById("crypto-aes-key");
+    this.cryptoLocalPub = document.getElementById("crypto-local-pub");
 
-    // Minimize chat toggle
+    // Connection lights
+    this.peerStatusLight = document.getElementById("peer-status-light");
+    this.lblConnectionStatus = document.getElementById("lbl-connection-status");
+
+    // Bind lobby triggers
     this.btnToggleChat.addEventListener("click", () => {
       this.chatPanel.classList.toggle("minimized");
       this.btnToggleChat.textContent = this.chatPanel.classList.contains("minimized") ? "[+]" : "[-]";
@@ -88,6 +88,37 @@ export class NetworkManager {
     });
   }
 
+  // Load friends from LocalStorage
+  loadFriends() {
+    const saved = localStorage.getItem("pg_friends");
+    if (saved) {
+      try {
+        this.friends = JSON.parse(saved);
+      } catch (e) {
+        this.friends = [];
+      }
+    }
+  }
+
+  saveFriends() {
+    localStorage.setItem("pg_friends", JSON.stringify(this.friends));
+  }
+
+  addFriend(handle) {
+    const trimmed = handle.trim();
+    if (!trimmed || !trimmed.includes("#")) return false;
+    if (this.friends.includes(trimmed)) return false;
+    this.friends.push(trimmed);
+    this.saveFriends();
+    return true;
+  }
+
+  removeFriend(handle) {
+    this.friends = this.friends.filter(f => f !== handle);
+    this.saveFriends();
+  }
+
+  // Generate local ECDH Key Pair
   async generateEcdhKeys() {
     try {
       this.localKeyPair = await window.crypto.subtle.generateKey(
@@ -98,138 +129,269 @@ export class NetworkManager {
 
       const localSpki = await window.crypto.subtle.exportKey("spki", this.localKeyPair.publicKey);
       const b64Key = arrayBufferToBase64(localSpki);
-      this.cryptoLocalPub.textContent = b64Key.substring(0, 16) + "...";
-      this.cryptoLocalPub.title = b64Key;
-      console.log("ECDH key pair generated successfully.");
+      this.cryptoLocalPub.textContent = this.myHandle || b64Key.substring(0, 12) + "...";
+      console.log("ECDH key pair generated.");
       return b64Key;
     } catch (err) {
       console.error("Error generating keys:", err);
-      this.lobbyStatus.textContent = "Crypto error generating keys.";
     }
+  }
+
+  // Setup PeerJS node based on login Nickname
+  initPeer(nickname) {
+    return new Promise((resolve, reject) => {
+      const randCode = Math.floor(1000 + Math.random() * 9000).toString();
+      this.myHandle = `${nickname}#${randCode}`;
+      
+      // Escape spaces for valid Peer IDs
+      const safeNick = nickname.replace(/\s+/g, '_');
+      const peerId = `pg-user-${safeNick}-${randCode}`;
+
+      this.peer = new Peer(peerId);
+
+      this.peer.on("open", (id) => {
+        console.log(`Lobby active. Peer handle: ${this.myHandle} (ID: ${id})`);
+        resolve(this.myHandle);
+      });
+
+      this.peer.on("connection", (connection) => {
+        this.handleIncomingConnection(connection);
+      });
+
+      this.peer.on("error", (err) => {
+        console.error("PeerJS error:", err);
+        reject(err);
+      });
+    });
+  }
+
+  // Perform background pings to check if friends are online
+  pingFriends(onUpdate) {
+    if (!this.peer || this.peer.destroyed) return;
+
+    this.friends.forEach((friendHandle) => {
+      const parts = friendHandle.split("#");
+      const name = parts[0].replace(/\s+/g, '_');
+      const code = parts[1];
+      const friendPeerId = `pg-user-${name}-${code}`;
+
+      // Skip pinging ourselves
+      if (friendHandle === this.myHandle) {
+        onUpdate(friendHandle, false);
+        return;
+      }
+
+      // Try brief connection handshake to check state
+      const conn = this.peer.connect(friendPeerId, {
+        metadata: { isPing: true, senderHandle: this.myHandle }
+      });
+
+      let responseTimeout = setTimeout(() => {
+        conn.close();
+        onUpdate(friendHandle, false);
+      }, 2500);
+
+      conn.on("open", () => {
+        clearTimeout(responseTimeout);
+        onUpdate(friendHandle, true);
+        conn.close(); // close ping immediately
+      });
+
+      conn.on("error", () => {
+        clearTimeout(responseTimeout);
+        onUpdate(friendHandle, false);
+      });
+    });
   }
 
   startSinglePlayer() {
     this.isSinglePlayer = true;
-    this.conn = null;
-    this.peer = null;
+    this.connections.clear();
     this.lobbyOverlay.classList.remove("active");
+    this.lobbyManager.classList.remove("active");
+    
     document.getElementById("game-hud").classList.remove("hidden");
-    
     this.peerStatusLight.className = "indicator yellow";
-    this.lblConnectionStatus.textContent = "Offline Sandbox (Single Player)";
+    this.lblConnectionStatus.textContent = "Offline Sandbox";
+    this.cryptoAesKey.textContent = "Offline Mode";
     
-    this.cryptoAesKey.textContent = "Offline Mode - No E2EE negotiated";
-    this.cryptoAesKey.style.color = "var(--yellow)";
-    this.cryptoLocalPub.textContent = "Offline";
-    this.cryptoRemotePub.textContent = "-";
-    
-    this.appendSystemMessage("⚡ Started Offline Single Player Sandbox. Build and explore at your own pace!");
+    this.appendSystemMessage("⚡ Started Offline Sandbox. Customize your look in the Wardrobe and build courses!");
   }
 
-  async startHosting() {
-    this.btnHost.disabled = true;
-    this.lobbyStatus.textContent = "Generating room credentials...";
+  async startHostingLobby(playerLimit, isPrivate) {
     this.isHost = true;
-
+    this.isSinglePlayer = false;
+    this.lobbyPeers = [this.peer.id];
+    
     const localPubB64 = await this.generateEcdhKeys();
     
-    // Room ID is a random 4 digit hex code to make sharing easy
-    const randCode = Math.floor(1000 + Math.random() * 9000).toString();
-    const peerId = `ccraft-${randCode}`;
+    // Choose Lobby ID
+    let roomCode = Math.floor(1000 + Math.random() * 9000).toString();
+    if (!isPrivate) {
+      // Public lobbies share a matching tag prefix
+      roomCode = `pub-${roomCode}`;
+    }
+    const lobbyId = `pg-room-${roomCode}`;
+    this.roomId = roomCode;
 
-    this.peer = new Peer(peerId);
+    // Create background coordinator node
+    const coordPeer = new Peer(lobbyId);
 
-    this.peer.on("open", (id) => {
-      const roomCode = id.replace("ccraft-", "");
-      this.roomId = roomCode;
-      this.lblRoomId.textContent = roomCode;
-      this.hostCodeDisplay.classList.remove("hidden");
-      this.lobbyStatus.textContent = "Waiting for player 2 to connect...";
-      console.log(`Lobby active. Peer ID: ${id}`);
+    coordPeer.on("open", () => {
+      console.log(`Lobby host coordinator open: ${lobbyId}`);
+      if (isPrivate) {
+        document.getElementById("lbl-room-code").textContent = roomCode;
+        document.getElementById("host-code-box").classList.remove("hidden");
+      }
+      this.lobbyStatus.textContent = isPrivate ? "Lobby created. Share code to start!" : "Searching for public players...";
     });
 
-    this.peer.on("connection", (connection) => {
-      if (this.conn) {
-        // Only allow one connected client
-        connection.on("open", () => {
+    coordPeer.on("connection", (connection) => {
+      // Hand off connection details to our user node
+      connection.on("open", () => {
+        if (this.connections.size >= playerLimit - 1) {
           connection.send({ type: "lobby-full" });
           setTimeout(() => connection.close(), 500);
+          return;
+        }
+
+        // Direct connect client to our main Peer node
+        connection.send({
+          type: "coord-handshake",
+          hostPeerId: this.peer.id,
+          lobbyPeers: this.lobbyPeers
         });
-        return;
-      }
-      this.handleIncomingConnection(connection, localPubB64);
-    });
-
-    this.peer.on("error", (err) => {
-      console.error("Peer error:", err);
-      this.lobbyStatus.textContent = `Hosting error: ${err.type === "unavailable-id" ? "Room code taken. Try again." : err.message}`;
-      this.btnHost.disabled = false;
-    });
-  }
-
-  async joinRoom() {
-    const code = this.txtJoinId.value.trim();
-    if (!code || code.length < 4) {
-      this.lobbyStatus.textContent = "Please enter a valid 4-digit Room ID.";
-      return;
-    }
-
-    this.btnJoin.disabled = true;
-    this.lobbyStatus.textContent = "Connecting to host...";
-    this.isHost = false;
-
-    const localPubB64 = await this.generateEcdhKeys();
-    const targetPeerId = `ccraft-${code}`;
-
-    this.peer = new Peer();
-
-    this.peer.on("open", () => {
-      const connection = this.peer.connect(targetPeerId);
-      this.handleIncomingConnection(connection, localPubB64);
-    });
-
-    this.peer.on("error", (err) => {
-      console.error("Peer connection error:", err);
-      this.lobbyStatus.textContent = "Failed to connect to host. Check Room ID.";
-      this.btnJoin.disabled = false;
-    });
-  }
-
-  handleIncomingConnection(connection, localPubB64) {
-    this.conn = connection;
-
-    this.conn.on("open", () => {
-      console.log("WebRTC channel open. Exchanging public keys...");
-      this.lobbyStatus.textContent = "Connection established! Sharing security tokens...";
-
-      // Step 1: Send our ECDH public key to the peer
-      this.conn.send({
-        type: "handshake",
-        pubKey: localPubB64
+        
+        setTimeout(() => connection.close(), 1000);
       });
     });
 
-    this.conn.on("data", (data) => {
-      this.handleReceivedPacket(data);
-    });
-
-    this.conn.on("close", () => {
-      this.disconnect();
-    });
-
-    this.conn.on("error", (err) => {
-      console.error("Connection stream error:", err);
-      this.disconnect();
+    coordPeer.on("error", (err) => {
+      console.warn("Coordinator collision or error. Re-hosting...", err);
+      coordPeer.destroy();
+      this.startHostingLobby(playerLimit, isPrivate); // retry
     });
   }
 
-  async handleReceivedPacket(data) {
+  async joinPrivateLobby(roomCode) {
+    this.isHost = false;
+    this.isSinglePlayer = false;
+    this.roomId = roomCode;
+    this.lobbyStatus.textContent = "Connecting to room coordinator...";
+
+    const localPubB64 = await this.generateEcdhKeys();
+    const lobbyId = `pg-room-${roomCode}`;
+
+    // Temporarily connect to lobby coordinator to receive host details
+    const conn = this.peer.connect(lobbyId);
+
+    conn.on("open", () => {
+      console.log("Connected to coordinator. Awaiting handoff...");
+    });
+
+    conn.on("data", (data) => {
+      if (data.type === "coord-handshake") {
+        console.log("Handoff received from coordinator. Connecting to host:", data.hostPeerId);
+        
+        // Connect to host directly
+        this.connectToPeer(data.hostPeerId, localPubB64);
+        
+        // Connect directly to all other peers already in the lobby
+        data.lobbyPeers.forEach((peerId) => {
+          if (peerId !== this.peer.id) {
+            this.connectToPeer(peerId, localPubB64);
+          }
+        });
+
+        conn.close();
+      } else if (data.type === "lobby-full") {
+        this.lobbyStatus.textContent = "Lobby is full! Connection rejected.";
+        conn.close();
+      }
+    });
+
+    conn.on("error", (err) => {
+      console.error("Join coordinator error:", err);
+      this.lobbyStatus.textContent = "Lobby not found. Verify Room Code.";
+    });
+  }
+
+  async connectToPeer(targetPeerId, localPubB64) {
+    if (this.connections.has(targetPeerId)) return;
+
+    if (!localPubB64) {
+      localPubB64 = await this.generateEcdhKeys();
+    }
+
+    const connection = this.peer.connect(targetPeerId, {
+      metadata: {
+        pubKey: localPubB64,
+        handle: this.myHandle,
+        model: this.game.localMannequinType,
+        wardrobe: this.game.localWardrobeOutfit
+      }
+    });
+
+    this.handleIncomingConnection(connection);
+  }
+
+  async handleIncomingConnection(connection) {
+    // Check if connection is a lobby ping
+    if (connection.metadata && connection.metadata.isPing) {
+      connection.on("open", () => {
+        connection.send({ type: "ping-ack" });
+        setTimeout(() => connection.close(), 100);
+      });
+      return;
+    }
+
+    this.connections.set(connection.peer, connection);
+
+    connection.on("open", () => {
+      console.log(`Connected to peer: ${connection.peer}`);
+      
+      // Perform E2EE handshake
+      this.initiateHandshakeWith(connection);
+    });
+
+    connection.on("data", (data) => {
+      this.handleReceivedPacket(connection.peer, data);
+    });
+
+    connection.on("close", () => {
+      this.onPeerDisconnected(connection.peer);
+    });
+
+    connection.on("error", (err) => {
+      console.error(`Connection error with ${connection.peer}:`, err);
+      this.onPeerDisconnected(connection.peer);
+    });
+  }
+
+  async initiateHandshakeWith(connection) {
+    try {
+      const myPubB64 = await this.generateEcdhKeys();
+      
+      // Send handshake info
+      connection.send({
+        type: "handshake",
+        pubKey: myPubB64,
+        handle: this.myHandle,
+        model: this.game.localMannequinType,
+        wardrobe: this.game.localWardrobeOutfit
+      });
+    } catch (e) {
+      console.error("Handshake initialization failed:", e);
+    }
+  }
+
+  async handleReceivedPacket(peerId, data) {
     if (data.type === "handshake") {
       try {
-        console.log("Received peer's public key. Deriving AES key...");
+        console.log(`E2EE handshake packet from ${data.handle}. Deriving keys...`);
         const peerPubRaw = base64ToArrayBuffer(data.pubKey);
 
-        this.remotePublicKey = await window.crypto.subtle.importKey(
+        const remotePubKey = await window.crypto.subtle.importKey(
           "spki",
           peerPubRaw,
           { name: "ECDH", namedCurve: "P-256" },
@@ -237,107 +399,131 @@ export class NetworkManager {
           []
         );
 
-        this.sharedAesKey = await window.crypto.subtle.deriveKey(
-          { name: "ECDH", public: this.remotePublicKey },
+        const sharedAesKey = await window.crypto.subtle.deriveKey(
+          { name: "ECDH", public: remotePubKey },
           this.localKeyPair.privateKey,
           { name: "AES-GCM", length: 256 },
           true,
           ["encrypt", "decrypt"]
         );
 
-        // Export derived key to HEX for verification
-        const rawKey = await window.crypto.subtle.exportKey("raw", this.sharedAesKey);
-        this.sharedAesKeyHex = arrayBufferToHex(rawKey);
+        const rawKey = await window.crypto.subtle.exportKey("raw", sharedAesKey);
+        const hexKey = arrayBufferToHex(rawKey);
 
-        this.cryptoRemotePub.textContent = data.pubKey.substring(0, 16) + "...";
-        this.cryptoRemotePub.title = data.pubKey;
-        this.cryptoAesKey.textContent = this.sharedAesKeyHex;
-        this.cryptoAesKey.style.color = "var(--green)";
+        this.sharedKeys.set(peerId, sharedAesKey);
+        this.sharedKeysHex.set(peerId, hexKey);
 
-        console.log("Derived shared AES key:", this.sharedAesKeyHex);
+        console.log(`Derived AES key for ${data.handle}: ${hexKey}`);
 
-        this.onRoomReady();
+        // Track in Host lobby lists
+        if (this.isHost && !this.lobbyPeers.includes(peerId)) {
+          this.lobbyPeers.push(peerId);
+        }
+
+        // Add visual peer avatar to lobby preview list
+        this.game.addLobbyPeer(peerId, data.handle, data.model, data.wardrobe);
+
+        // Update crypto indicator
+        this.updateCryptoUI();
+
+        // Update matchmaking visual lights
+        this.peerStatusLight.className = "indicator green";
+        this.lblConnectionStatus.textContent = `Connected (Lobby: ${this.roomId || "P2P"})`;
+
+        this.appendSystemMessage(`🔒 Encrypted connection established with ${data.handle}.`);
+
       } catch (err) {
-        console.error("Key derivation error:", err);
-        this.disconnect();
+        console.error("Mesh handshake key derivation failed:", err);
       }
-    } else if (data.type === "lobby-full") {
-      this.lobbyStatus.textContent = "Room is full. Connection rejected.";
-      this.disconnect();
+    } else if (data.type === "lobby-wardrobe-sync") {
+      // Sync client custom clothing inside Lobby preview (Screen 2 & 3)
+      this.game.updateLobbyPeerOutfit(peerId, data.model, data.wardrobe);
+    } else if (data.type === "start-game-trigger") {
+      // Host triggers transition to Screen 3 & 4
+      this.game.transitionToGameScreen(data.mapTheme);
     } else if (data.type === "sync") {
-      // Synchronize positions/rotations
-      this.game.syncPeerPlayer(data);
+      // Direct coordinate position interpolation in 3D world (Screen 4)
+      this.game.syncPeerPosition(peerId, data);
     } else if (data.type === "block-place") {
-      // Dynamic world building event sync
       this.game.world.placeBlockSync(data.pos, data.blockType, data.blockId);
     } else if (data.type === "block-delete") {
       this.game.world.deleteBlockSync(data.blockId);
+    } else if (data.type === "wardrobe-change") {
+      // Sync mid-game dressing transitions
+      this.game.syncPeerOutfit(peerId, data.model, data.wardrobe);
     } else if (data.type === "chat-e2ee") {
-      // Decode secure chat
-      this.decryptAndAppendChat(data.ciphertext, data.iv);
+      // Decrypt message
+      this.decryptAndAppendChat(peerId, data.senderHandle, data.ciphertext, data.iv);
     }
   }
 
-  onRoomReady() {
-    this.lobbyOverlay.classList.remove("active");
-    document.getElementById("game-hud").classList.remove("hidden");
-    
-    this.peerStatusLight.classList.remove("red");
-    this.peerStatusLight.classList.add("green");
-    this.lblConnectionStatus.textContent = `Connected (Room: ${this.roomId || "Peer"})`;
+  updateCryptoUI() {
+    if (this.sharedKeysHex.size === 0) {
+      this.cryptoAesKey.textContent = "Offline Mode";
+      this.cryptoAesKey.style.color = "var(--text-muted)";
+      return;
+    }
 
-    // Start sync ticking
-    this.game.startMultiplayerSync();
-    this.appendSystemMessage("🔒 Security Agreement Activated. Direct connection encrypted via AES-256-GCM.");
+    // List active derived hex keys in debug display
+    let text = "";
+    this.sharedKeysHex.forEach((hex, id) => {
+      const truncated = hex.substring(0, 10) + "...";
+      text += `Peer: ${truncated}\n`;
+    });
+    this.cryptoAesKey.textContent = text.trim();
+    this.cryptoAesKey.style.color = "var(--green)";
   }
 
   async sendChatMessage() {
     const text = this.txtChatMessage.value.trim();
     if (!text) return;
 
+    this.txtChatMessage.value = "";
+
     if (this.isSinglePlayer) {
-      this.txtChatMessage.value = "";
       this.appendChatMessage("You", text, true);
       this.appendSystemMessage("💬 Note: You are offline. Messages will not be broadcasted.");
       return;
     }
 
-    if (!this.sharedAesKey) return;
+    if (this.connections.size === 0) return;
 
-    this.txtChatMessage.value = "";
+    // Encrypt and send message to EVERY connected peer using their unique key
+    this.connections.forEach(async (conn, peerId) => {
+      const key = this.sharedKeys.get(peerId);
+      if (!key) return;
 
-    try {
-      const encoder = new TextEncoder();
-      const encodedText = encoder.encode(text);
-      
-      // AES-GCM IV must be 12 random bytes
-      const iv = window.crypto.getRandomValues(new Uint8Array(12));
+      try {
+        const encoder = new TextEncoder();
+        const encodedText = encoder.encode(text);
+        const iv = window.crypto.getRandomValues(new Uint8Array(12));
 
-      const ciphertextBuffer = await window.crypto.subtle.encrypt(
-        { name: "AES-GCM", iv: iv },
-        this.sharedAesKey,
-        encodedText
-      );
+        const ciphertextBuffer = await window.crypto.subtle.encrypt(
+          { name: "AES-GCM", iv: iv },
+          key,
+          encodedText
+        );
 
-      const ciphertextBase64 = arrayBufferToBase64(ciphertextBuffer);
-      const ivBase64 = arrayBufferToBase64(iv);
+        const ciphertextBase64 = arrayBufferToBase64(ciphertextBuffer);
+        const ivBase64 = arrayBufferToBase64(iv);
 
-      // Send base64 encrypted payload
-      this.conn.send({
-        type: "chat-e2ee",
-        ciphertext: ciphertextBase64,
-        iv: ivBase64
-      });
+        conn.send({
+          type: "chat-e2ee",
+          senderHandle: this.myHandle,
+          ciphertext: ciphertextBase64,
+          iv: ivBase64
+        });
+      } catch (err) {
+        console.error(`Encryption error for peer ${peerId}:`, err);
+      }
+    });
 
-      this.appendChatMessage("You", text, true);
-    } catch (err) {
-      console.error("Encryption error:", err);
-      this.appendSystemMessage("❌ Encryption failed. Message could not be sent.");
-    }
+    this.appendChatMessage("You", text, true);
   }
 
-  async decryptAndAppendChat(ciphertextB64, ivB64) {
-    if (!this.sharedAesKey) return;
+  async decryptAndAppendChat(peerId, senderHandle, ciphertextB64, ivB64) {
+    const key = this.sharedKeys.get(peerId);
+    if (!key) return;
 
     try {
       const ciphertext = base64ToArrayBuffer(ciphertextB64);
@@ -345,53 +531,95 @@ export class NetworkManager {
 
       const decryptedBuffer = await window.crypto.subtle.decrypt(
         { name: "AES-GCM", iv: iv },
-        this.sharedAesKey,
+        key,
         ciphertext
       );
 
       const decoder = new TextDecoder();
       const plainText = decoder.decode(decryptedBuffer);
 
-      this.appendChatMessage("Peer", plainText, false);
+      this.appendChatMessage(senderHandle, plainText, false);
       
-      // Console logging to show the user how packets look over the network
-      console.log(`[E2EE PACKET RECEIVED] 
+      console.log(`[E2EE CHAT PACKET FROM ${senderHandle}]
 Ciphertext: ${ciphertextB64}
 IV: ${ivB64}
-Decrypted Plaintext: "${plainText}"`);
+Plaintext: "${plainText}"`);
+
     } catch (err) {
       console.error("Decryption error:", err);
-      this.appendSystemMessage("⚠️ Received message failed authentication/decryption check.");
     }
   }
 
-  sendSyncPacket(packet) {
-    if (this.conn && this.conn.open) {
-      this.conn.send({
-        type: "sync",
-        ...packet
+  // Lobby Outfit updates broadcasting
+  broadcastLobbyOutfit(model, wardrobe) {
+    if (this.isSinglePlayer) return;
+    this.connections.forEach((conn) => {
+      conn.send({
+        type: "lobby-wardrobe-sync",
+        model,
+        wardrobe
       });
-    }
+    });
   }
 
-  sendBlockPlace(pos, blockType, blockId) {
-    if (this.conn && this.conn.open) {
-      this.conn.send({
+  // Mid-game Dress updates broadcasting
+  broadcastInGameOutfit(model, wardrobe) {
+    if (this.isSinglePlayer) return;
+    this.connections.forEach((conn) => {
+      conn.send({
+        type: "wardrobe-change",
+        model,
+        wardrobe
+      });
+    });
+  }
+
+  // Match launching
+  broadcastStartGame(mapTheme) {
+    if (this.isSinglePlayer) return;
+    this.connections.forEach((conn) => {
+      conn.send({
+        type: "start-game-trigger",
+        mapTheme
+      });
+    });
+  }
+
+  // Core movement coordinates synchronization
+  broadcastSync(packet) {
+    if (this.isSinglePlayer) return;
+    this.connections.forEach((conn) => {
+      if (conn.open) {
+        conn.send({
+          type: "sync",
+          ...packet
+        });
+      }
+    });
+  }
+
+  // Placed blocks sync
+  broadcastBlockPlace(pos, blockType, blockId) {
+    if (this.isSinglePlayer) return;
+    this.connections.forEach((conn) => {
+      conn.send({
         type: "block-place",
         pos,
         blockType,
         blockId
       });
-    }
+    });
   }
 
-  sendBlockDelete(blockId) {
-    if (this.conn && this.conn.open) {
-      this.conn.send({
+  // Deleted blocks sync
+  broadcastBlockDelete(blockId) {
+    if (this.isSinglePlayer) return;
+    this.connections.forEach((conn) => {
+      conn.send({
         type: "block-delete",
         blockId
       });
-    }
+    });
   }
 
   appendChatMessage(sender, message, isSelf) {
@@ -420,41 +648,51 @@ Decrypted Plaintext: "${plainText}"`);
     this.chatMessages.scrollTop = this.chatMessages.scrollHeight;
   }
 
-  disconnect() {
-    console.log("Disconnecting from room.");
+  onPeerDisconnected(peerId) {
+    console.log(`Peer disconnected: ${peerId}`);
     
-    this.isSinglePlayer = false;
+    this.connections.delete(peerId);
+    this.sharedKeys.delete(peerId);
+    this.sharedKeysHex.delete(peerId);
     
-    if (this.conn) {
-      this.conn.close();
-      this.conn = null;
+    this.lobbyPeers = this.lobbyPeers.filter(id => id !== peerId);
+    
+    this.updateCryptoUI();
+    this.game.removePeer(peerId);
+
+    if (this.connections.size === 0 && !this.isSinglePlayer) {
+      this.peerStatusLight.className = "indicator red";
+      this.lblConnectionStatus.textContent = "Disconnected (Lobby Empty)";
     }
+  }
+
+  disconnect() {
+    console.log("Shutting down connection node.");
+    
+    this.connections.forEach(conn => conn.close());
+    this.connections.clear();
+    this.sharedKeys.clear();
+    this.sharedKeysHex.clear();
+    this.lobbyPeers = [];
+    this.isSinglePlayer = false;
+
     if (this.peer) {
       this.peer.destroy();
       this.peer = null;
     }
 
-    this.sharedAesKey = null;
-    this.sharedAesKeyHex = null;
-
-    // Reset UI
-    this.btnHost.disabled = false;
-    this.btnJoin.disabled = false;
-    this.hostCodeDisplay.classList.add("hidden");
-    this.lobbyStatus.textContent = "Disconnected.";
-    this.lobbyOverlay.classList.add("active");
-    document.getElementById("game-hud").classList.add("hidden");
-
+    // Reset indicator HUD values
     this.peerStatusLight.className = "indicator red";
     this.lblConnectionStatus.textContent = "Disconnected";
+    this.cryptoAesKey.textContent = "Offline Mode";
+    this.cryptoLocalPub.textContent = "Generating...";
 
-    this.cryptoAesKey.textContent = "Awaiting connection...";
-    this.cryptoAesKey.style.color = "var(--text-muted)";
-    this.cryptoLocalPub.textContent = "Generating keys...";
-    this.cryptoRemotePub.textContent = "-";
-
-    this.chatMessages.innerHTML = `<div class="chat-system">Session ended. Enter code to reconnect.</div>`;
-
-    this.game.onPeerDisconnected();
+    this.chatMessages.innerHTML = "";
+    
+    this.lobbyOverlay.classList.add("active");
+    this.lobbyManager.classList.add("active");
+    document.getElementById("game-hud").classList.add("hidden");
+    
+    this.game.onPeerReset();
   }
 }
